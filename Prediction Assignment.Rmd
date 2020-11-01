@@ -1,0 +1,124 @@
+---
+title: "Prediction Assignment"
+author: "Yerkebulan Kambarov"
+date: "November 1, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background
+
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. Considering the availability of the recorded data, it would be very interesting to see the extent machine learning can be used to quantify how well people do certain activities. 
+
+```{r loading packages necessary for analysis}
+library(tidyverse)
+library(caret)
+library(inspectdf)
+library(e1071)
+```
+
+
+## Introduction
+
+In this project, our goal was to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants to predict to predict the manner in which they did the exercise. Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). More information is available from the website here: <http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har>
+
+First, we read in the training dataset and explore the dataset to better understand the characteristics.
+
+```{r cars}
+pml_train <- read_csv("pml-training.csv")
+dim(pml_train)
+str(pml_train)
+```
+
+We see that some of variables are missing most of the data points and therefore either should be removed or imputed using kNN or median. Since vast majority of the data points are missing and imputation may lead to invalid assumptions, we decided to remove these features completely from the analysis. However we should be mindful about systematic missing values, where missing data has a specific pattern associated with the target variable - "classe"", therefore we check how missing values are related to different categories in the "classe" variable. 
+
+
+```{r}
+pml_train %>%
+  mutate(cc = complete.cases(pml_train)) %>%
+  group_by(classe) %>%
+  summarise(cc_mean = mean(cc)) #distribution of obs with missing values
+
+inspect_na(pml_train) %>%
+  filter(pcnt < 50) %>% #rows with >50% of the features not missing
+  pull(col_name) -> selected_cols #includes target variable "classe"
+
+pml_train %>%
+  select(selected_cols) %>%
+  mutate(classe = as.factor(classe)) %>%
+  mutate(cvtd_timestamp = lubridate::dmy_hm(cvtd_timestamp)) %>%
+  select(-1) -> pml_train2
+```
+
+In addition, it would be helpful to explore if the categories in "classe" variable are equally present in the dataset. As significant imbalance in the distribution of different categories of "classe" variable may lead to inaccuracy in the models fit to the data. 
+
+```{r}
+pml_train2 %>%
+  ggplot(aes(classe)) + geom_bar() 
+```
+
+We see that 5 categories are roughly equally present in the dataset with class "A" slighly overpresent compared to other categories.
+
+## Methods
+
+After preprocessing of the dataset, we can use the data to train a model using caret package. As we would like to evaluate **out of the sample error**, we need to split the dataset into training dataset (pml_train3), which will be used for training the model and test dataset (pml_test3), which will be used to test the fit of the model. 
+
+```{r}
+sample(1:nrow(pml_train2), size = round(0.9 * nrow(pml_train2))) -> tr
+
+pml_train2[tr,] -> pml_train3
+pml_train2[-tr,] -> pml_test3
+```
+
+
+In the interest of simplicity (i.e. instead of using ensemble or stacked models) we trained 2 models: Random Forest with **repeated cross validation** and a decision tree (Recursive Partitioning And Regression Trees). Then we can compare the accuracy of the models and choose the one that has a better accuracy. 
+
+```{r}
+train(classe ~ ., data = pml_train3, method = "ranger", 
+      trControl = trainControl(method = "repeatedcv", number = 5, repeats = 2, 
+                               verboseIter = TRUE, savePredictions = "final",
+                               classProbs = TRUE)) -> mod1
+```
+
+```{r}
+train(classe ~ ., data = pml_train3, method = "rpart", 
+      trControl = trainControl(method = "cv", number = 5,  
+                               verboseIter = TRUE, savePredictions = "final",
+                               classProbs = TRUE)) -> mod2
+```
+
+
+## Results
+
+First we check **in sample accuracy** of the fitted models:
+
+```{r}
+print(mod1) #Random Forest
+print(mod2) #Recursive Partitioning And Regression Trees
+```
+
+
+Then to evaluate **out of the sample accuracy** of the models, we use test dataset (pml_test3).
+
+```{r}
+pred1 <- predict(mod1, newdata = pml_test3)
+
+confusionMatrix(data = pred1, reference = pml_test3$classe)
+```
+
+```{r}
+pred2 <- predict(mod2, newdata = pml_test3)
+
+confusionMatrix(data = pred2, reference = pml_test3$classe)
+```
+
+Accucarcy of the Random Forest model seems to be much higher than the accuracy of relatively simple model Recursive Partitioning And Regression Trees (0.999 vs 0.4893), therefore we choose Random Forest model (mod1) for prediction of target variable. 
+
+
+#Conclusion
+
+The accuracy of the model seems to be quite high in both cases and can be used to predict the target variable "classe" based on the predictor variables included in model training. Therefore, we conclude that we can utilize machine learning to quantify how well people do certain activities and it can be relatively well predicted using simple machine learning algorithms such as Random Forest. 
+
